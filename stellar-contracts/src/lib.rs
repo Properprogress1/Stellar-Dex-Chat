@@ -120,7 +120,18 @@ pub enum DataKey {
     BridgeLimit,
     /// Legacy key — superseded by `TokenRegistry`; kept for compatibility.
     TotalDeposited,
-    /// Cumulative withdrawn amount across successful withdraw calls.
+    /// Cumulative withdrawn amount across all successful withdrawal operations.
+    /// 
+    /// This counter enables off-chain reconciliation without replaying events:
+    /// `expected_balance = total_deposited - total_withdrawn`
+    /// 
+    /// Incremented after every successful token transfer in:
+    /// - `withdraw` (direct admin withdrawals)
+    /// - `execute_withdrawal` (queued withdrawal execution)
+    /// - `refund_deposit` (deposit refunds)
+    /// - `emergency_drain` (emergency fund recovery)
+    /// 
+    /// Uses checked arithmetic to prevent overflow on extreme values.
     TotalWithdrawn,
     /// Cumulative amount deposited by a specific user address.
     UserDeposited(Address),
@@ -1171,7 +1182,30 @@ impl FiatBridge {
         Ok(config.total_deposited)
     }
 
-    /// Cumulative withdrawal total tracked by successful `withdraw` calls.
+    /// Cumulative withdrawal total across all successful withdrawal operations.
+    ///
+    /// Returns the total amount of tokens withdrawn from the contract via:
+    /// - Direct admin withdrawals (`withdraw`)
+    /// - Queued withdrawal execution (`execute_withdrawal`)
+    /// - Deposit refunds (`refund_deposit`)
+    /// - Emergency drains (`emergency_drain`)
+    ///
+    /// # Off-chain Reconciliation
+    /// This value enables accurate balance reconciliation without replaying events:
+    /// ```text
+    /// expected_balance = total_deposited - total_withdrawn
+    /// ```
+    ///
+    /// # Returns
+    /// - `Ok(i128)` - Cumulative withdrawal total (0 if no withdrawals have occurred)
+    /// - `Err(Error::NotInitialized)` - Contract has not been initialized
+    ///
+    /// # Example
+    /// ```ignore
+    /// let total_withdrawn = bridge.get_total_withdrawn()?;
+    /// let total_deposited = bridge.get_total_deposited()?;
+    /// let expected_balance = total_deposited - total_withdrawn;
+    /// ```
     pub fn get_total_withdrawn(env: Env) -> Result<i128, Error> {
         if !env.storage().instance().has(&DataKey::Admin) {
             return Err(Error::NotInitialized);
